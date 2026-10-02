@@ -1,0 +1,5 @@
+/out/
+/ir-out/
+/target/
+/.fe-lsp/
+/.fe-lsp.json
