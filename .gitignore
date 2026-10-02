@@ -3,3 +3,7 @@
 /target/
 /.fe-lsp/
 /.fe-lsp.json
+
+# Native suite output and Python caches
+/native/out/
+__pycache__/

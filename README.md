@@ -40,6 +40,14 @@ fe test --backend native -O 1 .
 fe test --backend native -O 2 .
 ```
 
-The downstream differential and probe-count harness remains in
-[fevm/native/swisstable](https://github.com/fe-lang/fevm/tree/main/native/swisstable).
-It tests the exact git revision selected by fevm's dependency manifest.
+The [native suite](native/README.md) owns dictionary-oracle checks, probe counts,
+and baseline/candidate benchmarks. It also runs the six library tests at each
+requested optimization level:
+
+```sh
+python3 native/run.py --fe /path/to/pinned/fe --out /tmp/swisstable-check --check-only
+```
+
+Use a fresh output directory. Correctness checks run at O0/O1/O2 by default;
+omit `--check-only` to run lookup timing trials. The historical baseline is
+preserved in this repository's git history, so a full clone is required.
