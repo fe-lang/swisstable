@@ -24,7 +24,7 @@ swisstable = { source = "https://github.com/fe-lang/swisstable", rev = "<full co
 ```fe
 use swisstable::SwissTable
 
-let mut table = SwissTable<u256, u256>::empty()
+var table = SwissTable<u256, u256>::empty()
 core::assert(table.insert(17, 99))
 let lookup = table.get(17)
 core::assert(lookup.found && lookup.value == 99)
@@ -51,3 +51,7 @@ python3 native/run.py --fe /path/to/pinned/fe --out /tmp/swisstable-check --chec
 Use a fresh output directory. Correctness checks run at O0/O1/O2 by default;
 omit `--check-only` to run lookup timing trials. The historical baseline is
 preserved in this repository's git history, so a full clone is required.
+
+The MVS port passes all six library tests at O0/O1/O2 on Linux x86_64 with
+`sbillig/fe:mvs` at `fe5c32c1b9913a259667be9123a9090beb16ed1a` and native support.
+Mutable values and generated native drivers use `var` bindings.

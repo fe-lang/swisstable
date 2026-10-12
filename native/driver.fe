@@ -4,8 +4,8 @@ use std::io::{HostIo, Read, Write, host, read_char}
 use std::native::cpu_clock_ticks
 
 fn read64() -> u64 uses (input: mut Read) {
-    let mut value: u64 = 0
-    let mut i: u64 = 0
+    var value: u64 = 0
+    var i: u64 = 0
     while i < 8 {
         let byte = read_char()
         core::assert(byte >= 0)
@@ -17,7 +17,7 @@ fn read64() -> u64 uses (input: mut Read) {
 }
 
 fn write64(_ value: u64) uses (output: mut HostIo) {
-    let mut i: u64 = 0
+    var i: u64 = 0
     while i < 8 {
         output.write_char(c: ((value >> (i * 8)) & 255).downcast_unchecked())
         core::assert(!output.failed())
@@ -47,9 +47,9 @@ fn lookup_batch(
     count: usize,
     rounds: u64,
 ) -> u64 {
-    let mut index: usize = 0
-    let mut checksum: u64 = 0
-    let mut i: u64 = 0
+    var index: usize = 0
+    var checksum: u64 = 0
+    var i: u64 = 0
     while i < rounds {
         let lookup = table.get(keys[index])
         let value: u64 = lookup.value.downcast_truncate()
@@ -64,12 +64,12 @@ fn lookup_batch(
 
 pub fn main() -> i32 {
     with (Read = host(), HostIo = host()) {
-        let mut marker = read_char()
+        var marker = read_char()
         while marker != -1 {
             core::assert(marker == 64)
-            let mut table = SwissTable<u256, u256>::empty()
+            var table = SwissTable<u256, u256>::empty()
             let operations = read64()
-            let mut operation: u64 = 0
+            var operation: u64 = 0
             while operation < operations {
                 let kind = read64()
                 let key = read256()
@@ -88,8 +88,8 @@ pub fn main() -> i32 {
             write64(table.deleted.downcast_unchecked())
             let count: usize = read64().downcast_unchecked()
             core::assert(count > 0 && count <= 256)
-            let mut keys: [u256; 256] = [0; 256]
-            let mut i: usize = 0
+            var keys: [u256; 256] = [0; 256]
+            var i: usize = 0
             while i < count {
                 let key = read256()
                 keys[i] = key

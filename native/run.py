@@ -95,9 +95,9 @@ def instrument(source):
     """Count the real search loop in a separate generated diagnostic executable."""
     substitutions = [
         ('struct TableSearch {', 'struct TableSearch { groups: u64, slots: u64, comparisons: u64,', 1),
-        ('let mut first_deleted: usize = 0',
-         'let mut groups: u64 = 0\nlet mut slots: u64 = 0\nlet mut comparisons: u64 = 0\n'
-         'let mut first_deleted: usize = 0', 1),
+        ('var first_deleted: usize = 0',
+         'var groups: u64 = 0\nvar slots: u64 = 0\nvar comparisons: u64 = 0\n'
+         'var first_deleted: usize = 0', 1),
         ('while probe < TABLE_GROUPS {', 'while probe < TABLE_GROUPS { groups += 1', 1),
         ('let ctrl = self.ctrl[slot]', 'let ctrl = self.ctrl[slot]\nslots += 1\n'
          'if ctrl == fingerprint { comparisons += 1 }', 1),

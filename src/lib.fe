@@ -64,7 +64,7 @@ pub fn hash_u256(_ key: u256) -> u64 {
         accumulator: (0 as u64).wrapping_sub(HASH_PRIME1),
         lane: (key >> 192).downcast_truncate(),
     )
-    let mut hash = rotate_left(a, by: 1)
+    var hash = rotate_left(a, by: 1)
         .wrapping_add(rotate_left(b, by: 7))
         .wrapping_add(rotate_left(c, by: 12))
         .wrapping_add(rotate_left(d, by: 18))
@@ -122,13 +122,13 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
     }
 
     fn search(self, _ key: K, _ hash: u64, _ fingerprint: u8) -> TableSearch {
-        let mut first_deleted: usize = 0
-        let mut saw_deleted = false
-        let mut group = group_start(hash)
-        let mut probe: usize = 0
+        var first_deleted: usize = 0
+        var saw_deleted = false
+        var group = group_start(hash)
+        var probe: usize = 0
 
         while probe < TABLE_GROUPS {
-            let mut i: usize = 0
+            var i: usize = 0
             while i < TABLE_GROUP_WIDTH {
                 let slot = group + i
                 let ctrl = self.ctrl[slot]
@@ -237,12 +237,12 @@ fn swisstable_hash_reference_vectors() {
 
 #[test]
 fn swisstable_hash_distributes_each_limb() {
-    let mut shift: u256 = 0
+    var shift: u256 = 0
     while shift < 256 {
-        let mut groups: [usize; TABLE_GROUPS] = [0; TABLE_GROUPS]
-        let mut fingerprints: [bool; 128] = [false; 128]
-        let mut distinct: usize = 0
-        let mut i: u256 = 0
+        var groups: [usize; TABLE_GROUPS] = [0; TABLE_GROUPS]
+        var fingerprints: [bool; 128] = [false; 128]
+        var distinct: usize = 0
+        var i: u256 = 0
         while i < 256 {
             let hash = hash_u256(i << shift)
             let group = group_start(hash) / TABLE_GROUP_WIDTH
@@ -254,7 +254,7 @@ fn swisstable_hash_distributes_each_limb() {
             }
             i += 1
         }
-        let mut group: usize = 0
+        var group: usize = 0
         while group < TABLE_GROUPS {
             core::assert(groups[group] >= 4 && groups[group] <= 32)
             group += 1
@@ -283,8 +283,8 @@ impl SwissKey for CollidingKey {
 
 #[test]
 fn swisstable_collisions_updates_and_churn() {
-    let mut table = SwissTable<CollidingKey, u256>::empty()
-    let mut i: usize = 0
+    var table = SwissTable<CollidingKey, u256>::empty()
+    var i: usize = 0
     while i < TABLE_CAP {
         core::assert(
             table.insert(CollidingKey { value: i as u256 }, (i as u256) + 1),
@@ -300,7 +300,7 @@ fn swisstable_collisions_updates_and_churn() {
     core::assert(table.insert(CollidingKey { value: 0 }, 1))
     core::assert(table.insert(CollidingKey { value: 255 }, 256))
 
-    let mut generation: usize = 0
+    var generation: usize = 0
     while generation < 4 {
         i = 0
         while i < TABLE_CAP {
@@ -331,7 +331,7 @@ fn swisstable_collisions_updates_and_churn() {
 
 #[test]
 fn swisstable_basic_operations() {
-    let mut table = SwissTable<u256, u256>::empty()
+    var table = SwissTable<u256, u256>::empty()
     core::assert(table.is_empty())
     core::assert(table.capacity() == TABLE_CAP)
     core::assert(table.len() == 0)
@@ -357,8 +357,8 @@ fn swisstable_basic_operations() {
 
 #[test]
 fn swisstable_many_entries_roundtrip() {
-    let mut table = SwissTable<u256, u256>::empty()
-    let mut i: usize = 0
+    var table = SwissTable<u256, u256>::empty()
+    var i: usize = 0
     while i < 128 {
         let key = (i as u256).wrapping_mul(257) + 11
         core::assert(table.insert(key, key + 1000))
@@ -378,8 +378,8 @@ fn swisstable_many_entries_roundtrip() {
 
 #[test]
 fn swisstable_tombstones_reuse_full_table_slots() {
-    let mut table = SwissTable<u256, u256>::empty()
-    let mut i: usize = 0
+    var table = SwissTable<u256, u256>::empty()
+    var i: usize = 0
     while i < TABLE_CAP {
         core::assert(table.insert(i as u256, (i as u256) + 1))
         i += 1
