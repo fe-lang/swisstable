@@ -27,7 +27,10 @@ explicit threat model before this table can be considered production ready.
 Use a native-capable Fe compiler (see the repository README). Install Python
 3.10+, Git, a C compiler, and binutils on x86_64 Linux, or Xcode command-line
 tools on AArch64 macOS. No third-party Python packages are required. The baseline Git object must be
-available locally (default `ab4cf7dfd7242870364ababff04e2e4524bd2cf8`).
+available locally (default `60017e7f2f033e971bdb2a5f5d4af097115f3be8`).
+This MVS baseline preserves the historical `ab4cf7df` hash and table algorithms;
+its only source changes are eleven mutable binding spellings. Both comparison
+variants now use MVS syntax.
 
 ```sh
 python3 native/run.py --fe /path/to/pinned/fe \
@@ -76,3 +79,10 @@ including hashing and loop overhead, not whole-EVM throughput or insertion timin
 Run on an idle machine: CPU clocks exclude descheduling, but frequency, thermal
 state, and other workloads still affect results. Linux execution requires a Linux
 runner; a macOS result does not establish cross-platform acceptance.
+
+
+The MVS runner passes all 2,004 scenario checks across 12 O0/O1/O2 builds,
+including dictionary behavior and physical probe counts for both hash algorithms.
+All six current library tests and all three historical baseline tests also pass
+at every level. This check used Fe `2c114c8ae9d931aacef495b3e18042a8bc266944`
+on x86_64 Linux; timing trials were omitted.

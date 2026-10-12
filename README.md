@@ -55,3 +55,8 @@ preserved in this repository's git history, so a full clone is required.
 The MVS port passes all six library tests at O0/O1/O2 on Linux x86_64 with
 `sbillig/fe:mvs` at `fe5c32c1b9913a259667be9123a9090beb16ed1a` and native support.
 Mutable values and generated native drivers use `var` bindings.
+
+The historical comparison baseline is separately ported to MVS at
+`60017e7f2f033e971bdb2a5f5d4af097115f3be8`. The complete native check runner
+passes 2,004 scenario checks across 12 builds at O0/O1/O2, preserving both
+algorithms and their dictionary/probe oracles.

@@ -16,7 +16,7 @@ from support import artifacts, command, host_info
 ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 TABLE = 'src/lib.fe'
-BASELINE = 'ab4cf7dfd7242870364ababff04e2e4524bd2cf8'
+BASELINE = '60017e7f2f033e971bdb2a5f5d4af097115f3be8'
 MASK64 = (1 << 64) - 1
 MASK256 = (1 << 256) - 1
 PRIMES = (0x9E3779B185EBCA87, 0xC2B2AE3D27D4EB4F,
