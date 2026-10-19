@@ -83,6 +83,6 @@ runner; a macOS result does not establish cross-platform acceptance.
 
 The MVS runner passes all 2,004 scenario checks across 12 O0/O1/O2 builds,
 including dictionary behavior and physical probe counts for both hash algorithms.
-All six current library tests and all three historical baseline tests also pass
+All seven current library tests and all three historical baseline tests also pass
 at every level. This check used Fe `2c114c8ae9d931aacef495b3e18042a8bc266944`
 on x86_64 Linux; timing trials were omitted.

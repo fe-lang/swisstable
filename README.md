@@ -5,8 +5,10 @@ from [fevm](https://github.com/fe-lang/fevm) with its library history intact.
 
 `SwissTable<K, V>` stores up to 256 entries. Keys implement `SwissKey`, `Default`,
 and `Copy`; values implement `Default` and `Copy`. The public API includes
-`empty`, `len`, `capacity`, `is_empty`, `get`, `contains`, `insert`, and `remove`.
-`get` returns a `Lookup<V>` with `found` and `value` fields. Inserting an existing
+`empty`, `len`, `capacity`, `is_empty`, `get`, `contains`, `insert`, `remove`,
+and `entry`. `get` returns a `Lookup<V>` with `found` and `value` fields.
+`entry(slot)` reads one physical slot below `capacity()`, so callers can visit
+every live entry; deleted and empty slots report `occupied: false`. Inserting an existing
 key updates its value; inserting a new key into a full table returns `false`.
 
 The built-in `u256` key hash is XXH64 with seed zero over the key's 32
@@ -32,7 +34,7 @@ core::assert(lookup.found && lookup.value == 99)
 
 Use a Fe compiler with native backend support. The extraction was verified with
 Fe `09aed1e8817d0be5a9340dc7d6ad3fd7fec43f50`, the compiler pinned by fevm at
-extraction time. Run all six library tests at each optimization level:
+extraction time. Run all seven library tests at each optimization level:
 
 ```sh
 fe test --backend native -O 0 .
@@ -41,7 +43,7 @@ fe test --backend native -O 2 .
 ```
 
 The [native suite](native/README.md) owns dictionary-oracle checks, probe counts,
-and baseline/candidate benchmarks. It also runs the six library tests at each
+and baseline/candidate benchmarks. It also runs the seven library tests at each
 requested optimization level:
 
 ```sh
@@ -52,7 +54,7 @@ Use a fresh output directory. Correctness checks run at O0/O1/O2 by default;
 omit `--check-only` to run lookup timing trials. The historical baseline is
 preserved in this repository's git history, so a full clone is required.
 
-All six library tests and the native runner's 2,004 scenario checks pass at
+All seven library tests and the native runner's 2,004 scenario checks pass at
 O0/O1/O2 on Linux x86_64 with Fe master `f69b911ce544c4fe72b2481adcafabf1d967a278`.
 Mutable values and generated native drivers use `var` bindings.
 

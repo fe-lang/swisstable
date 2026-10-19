@@ -15,6 +15,9 @@ pub trait SwissKey {
 
 pub struct Lookup<V> { pub found: bool, pub value: V }
 
+// One physical slot; `occupied` is false for empty and deleted slots.
+pub struct Entry<K, V> { pub occupied: bool, pub key: K, pub value: V }
+
 struct TableSearch { found: bool, slot: usize, can_insert: bool, insert_slot: usize }
 
 pub struct SwissTable<K, V> {
@@ -174,6 +177,14 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
     }
     pub fn contains(self, _ key: K) -> bool {
         self.get(key).found
+    }
+    // Visit every live entry by reading slots `0..capacity()`; order is unspecified.
+    pub fn entry(self, _ slot: usize) -> Entry<K, V> {
+        core::assert(slot < TABLE_CAP)
+        if self.ctrl[slot] == TABLE_EMPTY || self.ctrl[slot] == TABLE_DELETED {
+            return Entry { occupied: false, key: K::default(), value: V::default() }
+        }
+        Entry { occupied: true, key: self.keys[slot], value: self.values[slot] }
     }
     pub fn insert(mut self, _ key: K, _ value: V) -> bool {
         let hash = key.hash()
@@ -395,4 +406,34 @@ fn swisstable_tombstones_reuse_full_table_slots() {
     core::assert(inserted.found)
     core::assert(inserted.value == 777)
     core::assert(table.len() == TABLE_CAP)
+}
+
+#[test]
+fn swisstable_entries_visit_each_live_key_once() {
+    var table = SwissTable<u256, u256>::empty()
+    var i: u256 = 0
+    while i < 40 {
+        core::assert(table.insert(i * 7, i))
+        i += 1
+    }
+    i = 0
+    while i < 40 {
+        if i % 3 == 0 { core::assert(table.remove(i * 7)) }
+        i += 1
+    }
+    var seen: [bool; 40] = [false; 40]
+    var count: usize = 0
+    var slot: usize = 0
+    while slot < table.capacity() {
+        let entry = table.entry(slot)
+        if entry.occupied {
+            let index: usize = (entry.key / 7).downcast_unchecked()
+            core::assert(entry.key % 7 == 0 && index % 3 != 0 && !seen[index])
+            core::assert(entry.value == index as u256)
+            seen[index] = true
+            count += 1
+        }
+        slot += 1
+    }
+    core::assert(count == table.len() && count == 26)
 }
