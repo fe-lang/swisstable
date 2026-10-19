@@ -52,8 +52,8 @@ Use a fresh output directory. Correctness checks run at O0/O1/O2 by default;
 omit `--check-only` to run lookup timing trials. The historical baseline is
 preserved in this repository's git history, so a full clone is required.
 
-The MVS port passes all six library tests at O0/O1/O2 on Linux x86_64 with
-`sbillig/fe:mvs` at `fe5c32c1b9913a259667be9123a9090beb16ed1a` and native support.
+All six library tests and the native runner's 2,004 scenario checks pass at
+O0/O1/O2 on Linux x86_64 with Fe master `f69b911ce544c4fe72b2481adcafabf1d967a278`.
 Mutable values and generated native drivers use `var` bindings.
 
 The historical comparison baseline is separately ported to MVS at
