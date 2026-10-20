@@ -55,6 +55,13 @@ fe test .
 ```
 
 The [native suite](native/README.md) owns dictionary-oracle checks, probe counts,
-and baseline/candidate benchmarks. Its physical model and probe instrumentation
-describe the earlier fixed 256-slot table, so it needs updating for the growable
-one before it can check this revision.
+and benchmarks against the historical fixed-capacity baseline. It also runs the
+library tests at each requested optimization level:
+
+```sh
+python3 native/run.py --fe /path/to/fe --out /tmp/swisstable-check --check-only
+```
+
+Use a fresh output directory. Correctness checks run at O0/O1/O2 by default;
+omit `--check-only` to run lookup timing trials. The historical baseline is
+preserved in this repository's git history, so a full clone is required.

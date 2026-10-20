@@ -76,7 +76,7 @@ pub fn main() -> i32 {
                 let value = read256()
                 __PROFILE_OPERATION__
                 let success = if kind == 1 {
-                    table.insert(key, value)
+                    __INSERT__
                 } else {
                     core::assert(kind == 2)
                     table.remove(key)
@@ -99,7 +99,7 @@ pub fn main() -> i32 {
                 write256(lookup.value)
                 let hash = key.hash()
                 write64((hash as u256).downcast_truncate())
-                write64(group_start(hash).downcast_unchecked())
+                write64(__GROUP__.downcast_unchecked())
                 write64(h2(hash) as u64)
                 i += 1
             }

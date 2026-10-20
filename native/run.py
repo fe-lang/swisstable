@@ -53,12 +53,25 @@ def hash_key(key, variant):
     return h ^ (h >> 32)
 
 
-class Model:
-    """Physical probe accounting, checked separately from a dictionary oracle."""
+class FixedModel:
+    """Physical probe accounting of the historical 256-slot table, checked
+    separately from a dictionary oracle."""
+    capacity = 256
+
     def __init__(self, variant):
         self.variant = variant
         self.ctrl = [255] * 256
         self.keys = [None] * 256
+
+    @property
+    def deleted(self):
+        return self.ctrl.count(128)
+
+    def group(self, h):
+        return h & 240
+
+    def fingerprint(self, h):
+        return (h >> 8) & 127
 
     def search(self, key):
         h = hash_key(key, self.variant)
@@ -91,7 +104,111 @@ class Model:
         return probes
 
 
-def instrument(source):
+def max_load(capacity):
+    return capacity - capacity // 8
+
+
+class GrowModel:
+    """Physical probe accounting of the growable table: power-of-two groups,
+    7/8 load, rehash on growth, and empty-slot reclamation on removal."""
+    def __init__(self, variant):
+        self.variant = variant
+        self.ctrl = []
+        self.keys = []
+        self.len = 0
+        self.deleted = 0
+
+    @property
+    def capacity(self):
+        return len(self.ctrl)
+
+    def group(self, h):
+        return 0 if not self.ctrl else (h & (self.capacity - 1)) & ~15
+
+    def fingerprint(self, h):
+        return h >> 57
+
+    def search(self, key):
+        if not self.ctrl:
+            return False, 0, (0, 0, 0)
+        h = hash_key(key, self.variant)
+        slot = self.group(h)
+        tombstone = None
+        groups = slots = comparisons = 0
+        while True:
+            slots += 1
+            if slots == 1 or slot % 16 == 0:
+                groups += 1
+            ctrl = self.ctrl[slot]
+            if ctrl == self.fingerprint(h):
+                comparisons += 1
+                if self.keys[slot] == key:
+                    return True, slot, (groups, slots, comparisons)
+            if ctrl == 255:
+                return False, tombstone if tombstone is not None else slot, (groups, slots, comparisons)
+            if ctrl == 128 and tombstone is None:
+                tombstone = slot
+            slot = (slot + 1) & (self.capacity - 1)
+
+    def grow(self, needed):
+        full = max_load(self.capacity)
+        capacity = self.capacity
+        if needed > full // 2:
+            capacity = 16
+            while max_load(capacity) < needed or max_load(capacity) <= full:
+                capacity *= 2
+        ctrl, keys = [255] * capacity, [None] * capacity
+        for slot, fingerprint in enumerate(self.ctrl):
+            if fingerprint not in (255, 128):
+                key = self.keys[slot]
+                to = (hash_key(key, self.variant) & (capacity - 1)) & ~15
+                while ctrl[to] != 255:
+                    to = (to + 1) & (capacity - 1)
+                ctrl[to], keys[to] = fingerprint, key
+        self.ctrl, self.keys, self.deleted = ctrl, keys, 0
+
+    def apply(self, kind, key):
+        found, slot, probes = self.search(key)
+        if kind == 1 and not found:
+            reuses = bool(self.ctrl) and self.ctrl[slot] == 128
+            if not reuses and self.len + self.deleted >= max_load(self.capacity):
+                self.grow(self.len + 1)
+                slot = self.search(key)[1]
+            if self.ctrl[slot] == 128:
+                self.deleted -= 1
+            self.ctrl[slot] = self.fingerprint(hash_key(key, self.variant))
+            self.keys[slot] = key
+            self.len += 1
+        elif kind == 2 and found:
+            self.len -= 1
+            mask = self.capacity - 1
+            if self.len == 0:
+                self.ctrl = [255] * self.capacity
+                self.deleted = 0
+            elif self.ctrl[(slot + 1) & mask] != 255:
+                self.ctrl[slot] = 128
+                self.deleted += 1
+            else:
+                self.ctrl[slot] = 255
+                slot = (slot - 1) & mask
+                while self.ctrl[slot] == 128:
+                    self.ctrl[slot] = 255
+                    self.deleted -= 1
+                    slot = (slot - 1) & mask
+        return probes
+
+
+# The historical baseline has 256 fixed slots; the candidate grows.
+VARIANTS = {
+    'baseline': {'model': FixedModel, 'insert': 'table.insert(key, value)',
+                 'group': 'group_start(hash)', 'search': 'table.search(key, hash, h2(hash))'},
+    'candidate': {'model': GrowModel, 'insert': 'table.try_insert(key, value)',
+                  'group': '(if table.capacity() == 0 { 0 } else { group_start(hash, table.capacity()) })',
+                  'search': 'table.search(key, hash)'},
+}
+
+
+def instrument(source, variant):
     """Count the real search loop in a separate generated diagnostic executable."""
     substitutions = [
         ('struct TableSearch {', 'struct TableSearch { groups: u64, slots: u64, comparisons: u64,', 1),
@@ -103,6 +220,22 @@ def instrument(source):
          'if ctrl == fingerprint { comparisons += 1 }', 1),
         ('return TableSearch {', 'return TableSearch { groups, slots, comparisons,', 2),
         ('TableSearch { found: false,', 'TableSearch { groups, slots, comparisons, found: false,', 1),
+    ] if variant == 'baseline' else [
+        ('struct Search { found: bool, slot: usize }',
+         'struct Search { groups: u64, slots: u64, comparisons: u64, found: bool, slot: usize }', 1),
+        ('Search { found: false, slot: 0 }',
+         'Search { groups: 0, slots: 0, comparisons: 0, found: false, slot: 0 }', 2),
+        ('var tombstone = capacity',
+         'var groups: u64 = 0\nvar slots: u64 = 0\nvar comparisons: u64 = 0\n'
+         'var tombstone = capacity', 1),
+        ('let ctrl = self.ctrl[slot]\n            if ctrl == fingerprint',
+         'let ctrl = self.ctrl[slot]\nslots += 1\n'
+         'if slots == 1 || slot % GROUP_WIDTH == 0 { groups += 1 }\n'
+         'if ctrl == fingerprint { comparisons += 1 }\n            if ctrl == fingerprint', 1),
+        ('return Search { found: true, slot }',
+         'return Search { groups, slots, comparisons, found: true, slot }', 1),
+        ('return Search { found: false, slot: if',
+         'return Search { groups, slots, comparisons, found: false, slot: if', 1),
     ]
     for old, new, count in substitutions:
         if source.count(old) != count:
@@ -111,20 +244,22 @@ def instrument(source):
     return source
 
 
-def source_text(table, profile):
+def source_text(table, variant, profile):
     # The production ingot tests run separately; this root embeds its exact
     # implementation to access private probe details without a public debug API.
     table = table.split('#[test]', 1)[0]
     if 'WrappingAdd' not in table:
         table = table.replace('use core::ops::WrappingMul', 'use core::ops::{WrappingAdd, WrappingMul}')
     if profile:
-        table = instrument(table)
-    diagnostic = '''let hash = key.hash()
-let search = table.search(key, hash, h2(hash))
+        table = instrument(table, variant)
+    spec = VARIANTS[variant]
+    diagnostic = f'''let hash = key.hash()
+let search = {spec['search']}
 write64(search.groups)
 write64(search.slots)
 write64(search.comparisons)''' if profile else ''
     driver = HERE.joinpath('driver.fe').read_text()
+    driver = driver.replace('__INSERT__', spec['insert']).replace('__GROUP__', spec['group'])
     return table + driver.replace('__PROFILE_OPERATION__', diagnostic).replace('__PROFILE_QUERY__', diagnostic)
 
 
@@ -158,8 +293,9 @@ def workloads():
                                   'family': family, 'occupancy': occupancy,
                                   'history': history, 'kind': kind,
                                   'operations': operations, 'queries': queries})
-    # A dictionary oracle exercises full-table failure, updates, removal misses,
-    # high limbs, and long mixed traces independently of the physical model.
+    # A dictionary oracle exercises full-table failure (in the fixed baseline),
+    # updates, removal misses, high limbs, and long mixed traces independently
+    # of the physical model.
     keys = families['random'][:384]
     operations = [(1, key, 2 * (i + 1)) for i, key in enumerate(keys)]
     operations += [(rng.choice((1, 1, 2)), rng.choice(keys), rng.getrandbits(255) << 1)
@@ -179,12 +315,12 @@ def workloads():
     return cases
 
 
-def expected(case):
+def expected(case, variant):
     values = {}
     replies = []
     for kind, key, value in case['operations']:
         if kind == 1:
-            success = key in values or len(values) < 256
+            success = key in values or variant == 'candidate' or len(values) < 256
             if success:
                 values[key] = value
         else:
@@ -205,15 +341,15 @@ def payload(case, rounds):
 
 def execute(executable, case, rounds, variant, profile, samples=1):
     data = command([executable], input=payload(case, rounds) * samples)
-    values, replies = expected(case)
+    values, replies = expected(case, variant)
     # Each workload has even values, hence every timed lookup advances one key.
     cycle = [values.get(key, 0) & MASK64 ^ int(key in values) for key in case['queries']]
     cycles, tail = divmod(rounds, len(cycle))
     checksum = (cycles * sum(cycle) + sum(cycle[:tail])) & MASK64
-    model = Model(variant)
+    model = VARIANTS[variant]['model'](variant)
     operation_probes = [model.apply(kind, key) for kind, key, value in case['operations']]
     query_probes = [model.search(key)[2] for key in case['queries']]
-    deleted = model.ctrl.count(128)
+    deleted = model.deleted
     offset = 0
 
     def take(width=8):
@@ -242,7 +378,7 @@ def execute(executable, case, rounds, variant, profile, samples=1):
                 raise AssertionError(f'{case["name"]}: query probes differ')
             observed = (take(), take(32), take(), take(), take())
             h = hash_key(key, variant)
-            wanted = (int(key in values), values.get(key, 0), h, h & 240, (h >> 8) & 127)
+            wanted = (int(key in values), values.get(key, 0), h, model.group(h), model.fingerprint(h))
             if observed != wanted:
                 raise AssertionError(f'{case["name"]}: key {key:#x}: {observed} != {wanted}')
         ticks.append(take())
@@ -268,7 +404,7 @@ def build(fe, out, table, variant, level, profile):
     folder = out / f'{variant}-O{level}-{"probes" if profile else "timing"}'
     folder.mkdir()
     src = folder / 'kernel.fe'
-    src.write_text(source_text(table, profile))
+    src.write_text(source_text(table, variant, profile))
     command([fe, 'fmt', src])
     report = folder / 'build.tar.gz'
     started = time.perf_counter()

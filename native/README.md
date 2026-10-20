@@ -5,20 +5,20 @@ The numeric key's least significant limb is the first input lane. The Fe
 implementation specializes the [XXH64 specification][spec] to that fixed length;
 it does not allocate or serialize a byte buffer. `SwissKey.hash` returns `u64`.
 Equal keys must hash equally, and a custom implementation should mix all key bits.
-The table still selects its initial 16-slot group from bits 4–7 and its seven-bit
-fingerprint from bits 8–14. Equality resolves fingerprint collisions.
+The table selects its initial 16-slot group from the hash's low bits, as many as
+its capacity needs, and its seven-bit fingerprint from the top seven bits.
+Equality resolves fingerprint collisions.
 
 The previous mixer multiplied a whole `u256` and shifted by small amounts. High
 limbs did not reach the bits consumed by the table: varying limb 2 or 3 produced
 identical initial groups and fingerprints. Narrowing before mixing would discard
 those limbs; the new hash consumes all four lanes before its final avalanche.
 
-This deterministic, non-cryptographic hash does not provide hash-flood protection.
-The table remains a scalar, fixed-capacity prototype with 256 entries. It has no
-growth or tombstone cleanup policy. Deletion preserves probe chains, but a table
-with no empty control bytes must scan all 256 slots on a miss even after most
-entries have been removed. Production state storage needs those policies and an
-explicit threat model before this table can be considered production ready.
+This deterministic, non-cryptographic hash does not provide hash-flood protection,
+which production state storage still needs an explicit threat model for. The
+table grows before entries and tombstones fill 7/8 of its slots, rehashing them
+and dropping every tombstone; removal frees slots whose successor is empty, so a
+miss stops at an empty slot however many entries were removed.
 
 [spec]: https://github.com/Cyan4973/xxHash/blob/v0.8.3/doc/xxhash_spec.md
 
@@ -57,15 +57,17 @@ without adding counters or diagnostic methods to the production API.
 - Six key families: sequential values in each of the four limbs, repeated limbs,
   and deterministic random full-width keys.
 - Occupancies of 64, 128, 224, and 256 entries. Each is tested fresh, after three
-  complete replacement cycles, and after filling to capacity and deleting down
+  complete replacement cycles, and after filling to 256 entries and deleting down
   to the requested occupancy. Hits and misses are measured separately.
-- Dictionary-oracle traces include capacity failures, existing-key updates,
-  unsuccessful removals, and 2,048 mixed operations. Runtime hash checks cover
-  every single bit, complemented bit, adjacent pair, and random full-width keys.
+- Dictionary-oracle traces include existing-key updates, unsuccessful removals,
+  2,048 mixed operations and, for the fixed 256-slot baseline, capacity failures.
+  Runtime hash checks cover every single bit, complemented bit, adjacent pair,
+  and random full-width keys.
 - Separate diagnostic builds count actual visited groups, inspected control
   bytes, and equality checks for every operation and query. Every count is
-  compared with an independent physical-table model. Histograms, means, p95,
-  maxima, and retained tombstone counts are recorded.
+  compared with an independent physical model of each variant: the baseline's
+  256 fixed slots and the candidate's growth, rehashing and slot reclamation.
+  Histograms, means, p95, maxima, and retained tombstone counts are recorded.
 
 Timed executables have no probe instrumentation. Runtime keys and values arrive
 through stdin; setup, individual correctness queries, and output are outside the
@@ -81,8 +83,8 @@ state, and other workloads still affect results. Linux execution requires a Linu
 runner; a macOS result does not establish cross-platform acceptance.
 
 
-The MVS runner passes all 2,004 scenario checks across 12 O0/O1/O2 builds,
-including dictionary behavior and physical probe counts for both hash algorithms.
-All seven current library tests and all three historical baseline tests also pass
-at every level. This check used Fe `2c114c8ae9d931aacef495b3e18042a8bc266944`
+The runner passes all 2,004 scenario checks across its 12 O0/O1/O2 builds (both
+variants, with and without probe instrumentation), including dictionary behavior
+and the physical probe counts of both models. All eight library tests also pass at
+every level. This check used Fe `999ff9562` (branch `feat/owned-value-destruction`)
 on x86_64 Linux; timing trials were omitted.
