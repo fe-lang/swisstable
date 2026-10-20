@@ -1,11 +1,11 @@
+use core::MemArray
 use core::default::Default
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
+use core::panics::PANIC_OUT_OF_MEMORY
 
-const TABLE_CAP: usize = 256
-const TABLE_GROUP_WIDTH: usize = 16
-const TABLE_GROUPS: usize = 16
-const TABLE_EMPTY: u8 = 255
-const TABLE_DELETED: u8 = 128
+const GROUP_WIDTH: usize = 16
+const EMPTY: u8 = 255
+const DELETED: u8 = 128
 
 pub trait SwissKey {
     // Equal keys must have equal hashes; all key bits should affect the result.
@@ -18,17 +18,25 @@ pub struct Lookup<V> { pub found: bool, pub value: V }
 // One physical slot; `occupied` is false for empty and deleted slots.
 pub struct Entry<K, V> { pub occupied: bool, pub key: K, pub value: V }
 
-struct TableSearch { found: bool, slot: usize, can_insert: bool, insert_slot: usize }
+// Where a key is, or the slot inserting it takes.
+struct Search { found: bool, slot: usize }
 
+/// A hash table of `Copy` keys and values in memory it owns.
+///
+/// The slots come in groups of 16, a power of two of them, and each has a
+/// control byte: empty, deleted, or seven bits of its key's hash. A key is
+/// searched for from the group its hash selects, slot by slot, until an
+/// empty slot. Entries and tombstones never fill more than 7/8 of the
+/// slots: past that, the table moves its entries to fresh slots, doubling
+/// them unless the entries would fill at most half, which drops every
+/// tombstone. A move that cannot allocate leaves the table as it was.
 pub struct SwissTable<K, V> {
-    ctrl: [u8; TABLE_CAP],
-    keys: [K; TABLE_CAP],
-    values: [V; TABLE_CAP],
+    ctrl: MemArray<u8>,
+    keys: MemArray<K>,
+    values: MemArray<V>,
     len: usize,
     deleted: usize,
 }
-
-impl<K, V> Copy for SwissTable<K, V> where K: Copy, V: Copy {}
 
 const HASH_PRIME1: u64 = 0x9e3779b185ebca87
 const HASH_PRIME2: u64 = 0xc2b2ae3d27d4eb4f
@@ -80,18 +88,30 @@ pub fn hash_u256(_ key: u256) -> u64 {
     hash ^ (hash >> 32)
 }
 
+// The fingerprint: the hash's top seven bits, which no group index uses.
 fn h2(_ hash: u64) -> u8 {
-    ((hash >> 8) & 127).downcast_unchecked()
+    (hash >> 57).downcast_unchecked()
 }
 
-fn group_start(_ hash: u64) -> usize {
-    let slot: usize = (hash & 255).downcast_unchecked()
-    (slot / TABLE_GROUP_WIDTH) * TABLE_GROUP_WIDTH
+// The group a hash selects among `capacity` slots, a power of two.
+fn group_start(_ hash: u64, _ capacity: usize) -> usize {
+    let slot = (hash as usize) & (capacity - 1)
+    slot - slot % GROUP_WIDTH
 }
 
-fn next_group(_ group: usize) -> usize {
-    let next = group + TABLE_GROUP_WIDTH
-    if next == TABLE_CAP { 0 } else { next }
+// The most entries and tombstones `capacity` slots hold.
+fn max_load(_ capacity: usize) -> usize {
+    capacity - capacity / 8
+}
+
+// The first empty slot of `hash`'s search in `ctrl`.
+fn empty_slot(_ ctrl: MemArray<u8>, _ hash: u64) -> usize {
+    let capacity = ctrl.len()
+    var slot = group_start(hash, capacity)
+    while ctrl[slot] != EMPTY {
+        slot = (slot + 1) & (capacity - 1)
+    }
+    slot
 }
 
 impl SwissKey for u256 {
@@ -105,11 +125,12 @@ impl SwissKey for u256 {
 }
 
 impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Copy {
+    /// An empty table, which has no slots until its first insertion.
     pub fn empty() -> Self {
         SwissTable {
-            ctrl: [TABLE_EMPTY; TABLE_CAP],
-            keys: [K::default(); TABLE_CAP],
-            values: [V::default(); TABLE_CAP],
+            ctrl: MemArray::from_fn(0, |_| EMPTY),
+            keys: MemArray::from_fn(0, |_| K::default()),
+            values: MemArray::from_fn(0, |_| V::default()),
             len: 0,
             deleted: 0,
         }
@@ -117,108 +138,156 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
     pub fn len(self) -> usize {
         self.len
     }
+    /// The number of physical slots, which `entry` reads.
     pub fn capacity(self) -> usize {
-        TABLE_CAP
+        self.ctrl.len()
     }
     pub fn is_empty(self) -> bool {
         self.len == 0
     }
 
-    fn search(self, _ key: K, _ hash: u64, _ fingerprint: u8) -> TableSearch {
-        var first_deleted: usize = 0
-        var saw_deleted = false
-        var group = group_start(hash)
-        var probe: usize = 0
-
-        while probe < TABLE_GROUPS {
-            var i: usize = 0
-            while i < TABLE_GROUP_WIDTH {
-                let slot = group + i
-                let ctrl = self.ctrl[slot]
-
-                if ctrl == fingerprint && self.keys[slot].equals(key) {
-                    return TableSearch {
-                        found: true,
-                        slot: slot,
-                        can_insert: false,
-                        insert_slot: 0,
-                    }
-                }
-
-                if ctrl == TABLE_DELETED && !saw_deleted {
-                    first_deleted = slot
-                    saw_deleted = true
-                } else if ctrl == TABLE_EMPTY {
-                    let insert_slot = if saw_deleted { first_deleted } else { slot }
-                    return TableSearch {
-                        found: false,
-                        slot: 0,
-                        can_insert: true,
-                        insert_slot: insert_slot,
-                    }
-                }
-
-                i += 1
-            }
-
-            group = next_group(group)
-            probe += 1
+    fn search(self, _ key: K, _ hash: u64) -> Search {
+        let capacity = self.ctrl.len()
+        if capacity == 0 {
+            return Search { found: false, slot: 0 }
         }
-
-        TableSearch { found: false, slot: 0, can_insert: saw_deleted, insert_slot: first_deleted }
+        let fingerprint = h2(hash)
+        // The first tombstone the search passes, if any, takes an insertion.
+        var tombstone = capacity
+        var slot = group_start(hash, capacity)
+        while true {
+            let ctrl = self.ctrl[slot]
+            if ctrl == fingerprint && self.keys[slot].equals(key) {
+                return Search { found: true, slot }
+            }
+            if ctrl == EMPTY {
+                return Search { found: false, slot: if tombstone < capacity { tombstone } else { slot } }
+            }
+            if ctrl == DELETED && tombstone == capacity {
+                tombstone = slot
+            }
+            slot = (slot + 1) & (capacity - 1)
+        }
+        Search { found: false, slot: 0 }
     }
     pub fn get(self, _ key: K) -> Lookup<V> {
-        let hash = key.hash()
-        let search = self.search(key, hash, h2(hash))
+        let search = self.search(key, key.hash())
         if search.found {
             return Lookup { found: true, value: self.values[search.slot] }
         }
         Lookup { found: false, value: V::default() }
     }
     pub fn contains(self, _ key: K) -> bool {
-        self.get(key).found
+        self.search(key, key.hash()).found
     }
     // Visit every live entry by reading slots `0..capacity()`; order is unspecified.
     pub fn entry(self, _ slot: usize) -> Entry<K, V> {
-        core::assert(slot < TABLE_CAP)
-        if self.ctrl[slot] == TABLE_EMPTY || self.ctrl[slot] == TABLE_DELETED {
+        let ctrl = self.ctrl[slot]
+        if ctrl == EMPTY || ctrl == DELETED {
             return Entry { occupied: false, key: K::default(), value: V::default() }
         }
         Entry { occupied: true, key: self.keys[slot], value: self.values[slot] }
     }
-    pub fn insert(mut self, _ key: K, _ value: V) -> bool {
+    /// Inserts `key` with `value`, or updates its value. Reverts with
+    /// `Panic(0x41)` when the table cannot grow.
+    pub fn insert(mut self, _ key: K, _ value: V) {
+        if !self.try_insert(key, value) {
+            core::panic_code(PANIC_OUT_OF_MEMORY)
+        }
+    }
+    /// As `insert`, but `false`, leaving the table as it was, when it cannot
+    /// grow.
+    pub fn try_insert(mut self, _ key: K, _ value: V) -> bool {
         let hash = key.hash()
-        let fingerprint = h2(hash)
-        let search = self.search(key, hash, fingerprint)
+        var search = self.search(key, hash)
         if search.found {
             self.values[search.slot] = value
             return true
         }
-
-        if !search.can_insert {
-            return false
+        // An entry in a tombstone's slot adds no load.
+        let reuses = self.ctrl.len() != 0 && self.ctrl[search.slot] == DELETED
+        if !reuses && self.len + self.deleted >= max_load(self.ctrl.len()) {
+            if !self.try_grow(self.len + 1) {
+                return false
+            }
+            search = self.search(key, hash)
         }
-
-        let slot = search.insert_slot
-        if self.ctrl[slot] == TABLE_DELETED {
+        if self.ctrl[search.slot] == DELETED {
             self.deleted -= 1
         }
-        self.ctrl[slot] = fingerprint
-        self.keys[slot] = key
-        self.values[slot] = value
+        self.ctrl[search.slot] = h2(hash)
+        self.keys[search.slot] = key
+        self.values[search.slot] = value
         self.len += 1
         true
     }
+    /// Makes room for `additional` more entries without moving any; `false`,
+    /// leaving the table as it was, when it cannot allocate.
+    pub fn try_reserve(mut self, _ additional: usize) -> bool {
+        let needed = self.len + additional
+        needed + self.deleted <= max_load(self.ctrl.len()) || self.try_grow(needed)
+    }
     pub fn remove(mut self, _ key: K) -> bool {
-        let hash = key.hash()
-        let search = self.search(key, hash, h2(hash))
+        let search = self.search(key, key.hash())
         if !search.found {
             return false
         }
-
-        self.ctrl[search.slot] = TABLE_DELETED
         self.len -= 1
-        self.deleted += 1
+        let capacity = self.ctrl.len()
+        if self.len == 0 {
+            // Nothing is left to find.
+            self.ctrl.as_slice().fill(EMPTY)
+            self.deleted = 0
+            return true
+        }
+        // Every search reads slots in the same circular order, and ends at
+        // an empty slot: one the next slot of which is empty ends every
+        // search through it, and so do the tombstones before it.
+        var slot = search.slot
+        if self.ctrl[(slot + 1) & (capacity - 1)] != EMPTY {
+            self.ctrl[slot] = DELETED
+            self.deleted += 1
+            return true
+        }
+        self.ctrl[slot] = EMPTY
+        slot = (slot + capacity - 1) & (capacity - 1)
+        while self.ctrl[slot] == DELETED {
+            self.ctrl[slot] = EMPTY
+            self.deleted -= 1
+            slot = (slot + capacity - 1) & (capacity - 1)
+        }
+        true
+    }
+
+    // Moves the entries to fresh slots for `needed` of them: the same
+    // number when they fill at most half, else the fewest that hold them
+    // and more than the current ones. Every tombstone is dropped.
+    fn try_grow(mut self, _ needed: usize) -> bool {
+        let full = max_load(self.ctrl.len())
+        var capacity = self.ctrl.len()
+        if needed > full / 2 {
+            capacity = GROUP_WIDTH
+            while max_load(capacity) < needed || max_load(capacity) <= full {
+                capacity *= 2
+            }
+        }
+        let Option::Some(var ctrl) = MemArray::try_from_fn(capacity, |_| EMPTY) else { return false }
+        let Option::Some(var keys) = MemArray::try_from_fn(capacity, |_| K::default()) else { return false }
+        let Option::Some(var values) = MemArray::try_from_fn(capacity, |_| V::default()) else { return false }
+        for slot in 0..self.ctrl.len() {
+            let fingerprint = self.ctrl[slot]
+            if fingerprint != EMPTY && fingerprint != DELETED {
+                let key = self.keys[slot]
+                let to = empty_slot(ctrl, key.hash())
+                ctrl[to] = fingerprint
+                keys[to] = key
+                values[to] = self.values[slot]
+            }
+        }
+        self.ctrl = ctrl
+        self.keys = keys
+        self.values = values
+        self.deleted = 0
         true
     }
 }
@@ -250,14 +319,13 @@ fn swisstable_hash_reference_vectors() {
 fn swisstable_hash_distributes_each_limb() {
     var shift: u256 = 0
     while shift < 256 {
-        var groups: [usize; TABLE_GROUPS] = [0; TABLE_GROUPS]
+        var groups: [usize; 16] = [0; 16]
         var fingerprints: [bool; 128] = [false; 128]
         var distinct: usize = 0
         var i: u256 = 0
         while i < 256 {
             let hash = hash_u256(i << shift)
-            let group = group_start(hash) / TABLE_GROUP_WIDTH
-            groups[group] += 1
+            groups[group_start(hash, 256) / GROUP_WIDTH] += 1
             let fingerprint = h2(hash) as usize
             if !fingerprints[fingerprint] {
                 fingerprints[fingerprint] = true
@@ -265,17 +333,15 @@ fn swisstable_hash_distributes_each_limb() {
             }
             i += 1
         }
-        var group: usize = 0
-        while group < TABLE_GROUPS {
-            core::assert(groups[group] >= 4 && groups[group] <= 32)
-            group += 1
+        for count in groups {
+            core::assert(count >= 4 && count <= 32)
         }
         core::assert(distinct >= 96)
         shift += 64
     }
 }
 
-// Deliberately collide in the final group to exercise wraparound and equality.
+// Deliberately collide in one group to exercise wraparound and equality.
 struct CollidingKey { value: u256 }
 impl Copy for CollidingKey {}
 impl Default for CollidingKey {
@@ -294,49 +360,50 @@ impl SwissKey for CollidingKey {
 
 #[test]
 fn swisstable_collisions_updates_and_churn() {
+    let count: u256 = 300
     var table = SwissTable<CollidingKey, u256>::empty()
-    var i: usize = 0
-    while i < TABLE_CAP {
-        core::assert(
-            table.insert(CollidingKey { value: i as u256 }, (i as u256) + 1),
-        )
+    var i: u256 = 0
+    while i < count {
+        core::assert(table.try_insert(CollidingKey { value: i }, i + 1))
         i += 1
     }
-    core::assert(!table.insert(CollidingKey { value: 1000 }, 1))
+    core::assert(table.len() == 300 && table.capacity() == 512)
     // A tombstone before an existing key must not create a duplicate on update.
     core::assert(table.remove(CollidingKey { value: 0 }))
-    core::assert(table.insert(CollidingKey { value: 255 }, 999))
-    core::assert(table.len() == 255)
+    table.insert(CollidingKey { value: 255 }, 999)
+    core::assert(table.len() == 299)
     core::assert(table.get(CollidingKey { value: 255 }).value == 999)
-    core::assert(table.insert(CollidingKey { value: 0 }, 1))
-    core::assert(table.insert(CollidingKey { value: 255 }, 256))
+    table.insert(CollidingKey { value: 0 }, 1)
+    table.insert(CollidingKey { value: 255 }, 256)
 
-    var generation: usize = 0
+    var generation: u256 = 0
     while generation < 4 {
         i = 0
-        while i < TABLE_CAP {
-            let old = (generation * TABLE_CAP + i) as u256
-            let new = old + (TABLE_CAP as u256)
+        while i < count {
+            let old = generation * count + i
+            let new = old + count
             core::assert(table.get(CollidingKey { value: old }).value == old + 1)
             core::assert(table.remove(CollidingKey { value: old }))
             core::assert(!table.remove(CollidingKey { value: old }))
             core::assert(!table.contains(CollidingKey { value: old }))
-            core::assert(table.insert(CollidingKey { value: new }, new + 1))
-            core::assert(table.len() == TABLE_CAP)
+            table.insert(CollidingKey { value: new }, new + 1)
+            core::assert(table.len() == 300)
             i += 1
         }
         generation += 1
     }
+    // Churn drops tombstones without growing.
+    core::assert(table.capacity() == 512)
     i = 0
-    while i < TABLE_CAP {
-        let key = (generation * TABLE_CAP + i) as u256
+    while i < count {
+        let key = generation * count + i
         core::assert(table.get(CollidingKey { value: key }).value == key + 1)
         core::assert(table.remove(CollidingKey { value: key }))
         i += 1
     }
     core::assert(table.is_empty())
     core::assert(!table.contains(CollidingKey { value: 5000 }))
-    core::assert(table.insert(CollidingKey { value: 5000 }, 17))
+    table.insert(CollidingKey { value: 5000 }, 17)
     core::assert(table.get(CollidingKey { value: 5000 }).value == 17)
 }
 
@@ -344,17 +411,18 @@ fn swisstable_collisions_updates_and_churn() {
 fn swisstable_basic_operations() {
     var table = SwissTable<u256, u256>::empty()
     core::assert(table.is_empty())
-    core::assert(table.capacity() == TABLE_CAP)
+    core::assert(table.capacity() == 0)
     core::assert(table.len() == 0)
     core::assert(!table.contains(17))
+    core::assert(!table.remove(17))
 
-    core::assert(table.insert(17, 99))
-    core::assert(table.len() == 1)
+    table.insert(17, 99)
+    core::assert(table.len() == 1 && table.capacity() == GROUP_WIDTH)
     let first = table.get(17)
     core::assert(first.found)
     core::assert(first.value == 99)
 
-    core::assert(table.insert(17, 123))
+    table.insert(17, 123)
     core::assert(table.len() == 1)
     let updated = table.get(17)
     core::assert(updated.found)
@@ -367,45 +435,65 @@ fn swisstable_basic_operations() {
 }
 
 #[test]
-fn swisstable_many_entries_roundtrip() {
+fn swisstable_grows_and_keeps_every_entry() {
     var table = SwissTable<u256, u256>::empty()
-    var i: usize = 0
-    while i < 128 {
-        let key = (i as u256).wrapping_mul(257) + 11
-        core::assert(table.insert(key, key + 1000))
+    var i: u256 = 0
+    while i < 5000 {
+        let key = i.wrapping_mul(257) + 11
+        table.insert(key, key + 1000)
+        // Entries and tombstones fill at most 7/8 of the slots.
+        core::assert(table.len() <= table.capacity() - table.capacity() / 8)
         i += 1
     }
-
+    core::assert(table.len() == 5000 && table.capacity() == 8192)
     i = 0
-    while i < 128 {
-        let key = (i as u256).wrapping_mul(257) + 11
+    while i < 5000 {
+        let key = i.wrapping_mul(257) + 11
         let lookup = table.get(key)
-        core::assert(lookup.found)
-        core::assert(lookup.value == key + 1000)
+        core::assert(lookup.found && lookup.value == key + 1000)
+        core::assert(!table.contains(key + 1))
         i += 1
     }
-    core::assert(table.len() == 128)
 }
 
 #[test]
-fn swisstable_tombstones_reuse_full_table_slots() {
+fn swisstable_reserves_room() {
     var table = SwissTable<u256, u256>::empty()
-    var i: usize = 0
-    while i < TABLE_CAP {
-        core::assert(table.insert(i as u256, (i as u256) + 1))
+    core::assert(table.try_reserve(100))
+    let capacity = table.capacity()
+    core::assert(capacity == 128)
+    var i: u256 = 0
+    while i < 100 {
+        core::assert(table.try_insert(i, i))
         i += 1
     }
+    core::assert(table.capacity() == capacity)
+}
 
-    core::assert(table.len() == TABLE_CAP)
-    core::assert(!table.insert(10000, 1))
-    core::assert(table.remove(99))
-    core::assert(!table.contains(99))
-    core::assert(table.insert(10000, 777))
-
-    let inserted = table.get(10000)
-    core::assert(inserted.found)
-    core::assert(inserted.value == 777)
-    core::assert(table.len() == TABLE_CAP)
+#[test]
+fn swisstable_removal_reclaims_slots() {
+    var table = SwissTable<u256, u256>::empty()
+    var round: u256 = 0
+    while round < 64 {
+        var i: u256 = 0
+        while i < 100 {
+            table.insert(round * 100 + i, i)
+            i += 1
+        }
+        i = 0
+        while i < 100 {
+            core::assert(table.remove(round * 100 + i))
+            i += 1
+        }
+        round += 1
+    }
+    // Emptying the table frees every slot, so churn never grows it.
+    core::assert(table.is_empty() && table.capacity() == 128)
+    var slot: usize = 0
+    while slot < table.capacity() {
+        core::assert(!table.entry(slot).occupied)
+        slot += 1
+    }
 }
 
 #[test]
@@ -413,7 +501,7 @@ fn swisstable_entries_visit_each_live_key_once() {
     var table = SwissTable<u256, u256>::empty()
     var i: u256 = 0
     while i < 40 {
-        core::assert(table.insert(i * 7, i))
+        table.insert(i * 7, i)
         i += 1
     }
     i = 0
