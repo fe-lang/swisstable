@@ -86,5 +86,5 @@ runner; a macOS result does not establish cross-platform acceptance.
 The runner passes all 2,004 scenario checks across its 12 O0/O1/O2 builds (both
 variants, with and without probe instrumentation), including dictionary behavior
 and the physical probe counts of both models. All eight library tests also pass at
-every level. This check used Fe `a353e3cb1` (branch `feat/owned-value-destruction`)
+every level. This check used Fe `0f2218d38` (branch `feat/owned-value-destruction`)
 on x86_64 Linux; timing trials were omitted.
