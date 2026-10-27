@@ -43,49 +43,26 @@ const HASH_PRIME2: u64 = 0xc2b2ae3d27d4eb4f
 const HASH_PRIME3: u64 = 0x165667b19e3779f9
 const HASH_PRIME4: u64 = 0x85ebca77c2b2ae63
 
-fn rotate_left(_ value: u64, by: u64) -> u64 {
-    (value << by) | (value >> (64 - by))
+// The high and low words of the 128-bit product, folded together.
+fn folded_multiply(_ a: u64, _ b: u64) -> u64 {
+    let product = (a as u128) * (b as u128)
+    let low: u64 = product.downcast_truncate()
+    let high: u64 = (product >> 64).downcast_truncate()
+    low ^ high
 }
 
-fn hash_round(accumulator: u64, lane: u64) -> u64 {
-    let sum = accumulator.wrapping_add(lane.wrapping_mul(HASH_PRIME2))
-    rotate_left(sum, by: 31).wrapping_mul(HASH_PRIME1)
-}
-
-fn hash_merge(accumulator: u64, lane: u64) -> u64 {
-    (accumulator ^ hash_round(accumulator: 0, lane))
-        .wrapping_mul(HASH_PRIME1)
-        .wrapping_add(HASH_PRIME4)
-}
-
-// XXH64, seed zero, specialized to the key's 32 little-endian bytes.
-// https://github.com/Cyan4973/xxHash/blob/v0.8.3/doc/xxhash_spec.md
-// Deterministic and non-cryptographic; this is not hash-flood protection.
+// Folded multiplication, as in foldhash: each pair of the key's 64-bit
+// limbs, offset by constants, multiplies into one lane, and the lanes
+// multiply into the hash. Deterministic and non-cryptographic; this is not
+// hash-flood protection.
 pub fn hash_u256(_ key: u256) -> u64 {
-    let a = hash_round(
-        accumulator: HASH_PRIME1.wrapping_add(HASH_PRIME2),
-        lane: key.downcast_truncate(),
-    )
-    let b = hash_round(
-        accumulator: HASH_PRIME2,
-        lane: (key >> 64).downcast_truncate(),
-    )
-    let c = hash_round(accumulator: 0, lane: (key >> 128).downcast_truncate())
-    let d = hash_round(
-        accumulator: (0 as u64).wrapping_sub(HASH_PRIME1),
-        lane: (key >> 192).downcast_truncate(),
-    )
-    var hash = rotate_left(a, by: 1)
-        .wrapping_add(rotate_left(b, by: 7))
-        .wrapping_add(rotate_left(c, by: 12))
-        .wrapping_add(rotate_left(d, by: 18))
-    hash = hash_merge(accumulator: hash, lane: a)
-    hash = hash_merge(accumulator: hash, lane: b)
-    hash = hash_merge(accumulator: hash, lane: c)
-    hash = hash_merge(accumulator: hash, lane: d).wrapping_add(32)
-    hash = (hash ^ (hash >> 33)).wrapping_mul(HASH_PRIME2)
-    hash = (hash ^ (hash >> 29)).wrapping_mul(HASH_PRIME3)
-    hash ^ (hash >> 32)
+    let limb0: u64 = key.downcast_truncate()
+    let limb1: u64 = (key >> 64).downcast_truncate()
+    let limb2: u64 = (key >> 128).downcast_truncate()
+    let limb3: u64 = (key >> 192).downcast_truncate()
+    let low = folded_multiply(limb0 ^ HASH_PRIME1, limb1 ^ HASH_PRIME2)
+    let high = folded_multiply(limb2 ^ HASH_PRIME3, limb3 ^ HASH_PRIME4)
+    folded_multiply(low ^ HASH_PRIME2, high ^ HASH_PRIME1)
 }
 
 // The fingerprint: the hash's top seven bits, which no group index uses.
@@ -294,24 +271,24 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
 
 #[test]
 fn swisstable_hash_reference_vectors() {
-    // xxhsum 0.8.3 -H64 over exactly 32 little-endian bytes, seed zero.
-    core::assert(hash_u256(0) == 0xf6e9be5d70632cf5)
-    core::assert(hash_u256(1) == 0xf186e28fede3a371)
-    core::assert(hash_u256(1 << 64) == 0x71c9f435fb0cdabe)
-    core::assert(hash_u256(1 << 128) == 0x3e71211b63c69dcc)
-    core::assert(hash_u256(1 << 192) == 0x7c5718911874b771)
-    core::assert(hash_u256(1 << 255) == 0xf4f2331f4d854e48)
+    // `folded_multiply` over 128-bit products, computed independently.
+    core::assert(hash_u256(0) == 0xe0a7e05b32ab24b6)
+    core::assert(hash_u256(1) == 0x7fba99af9d58edc9)
+    core::assert(hash_u256(1 << 64) == 0xc320d13399174840)
+    core::assert(hash_u256(1 << 128) == 0xbb7549e3223197aa)
+    core::assert(hash_u256(1 << 192) == 0xbe42ec3b709f5d00)
+    core::assert(hash_u256(1 << 255) == 0x4eb05caf2ed07349)
     core::assert(
         hash_u256(
                 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
             )
-            == 0xff10223616c08787,
+            == 0xa0b88a029900681b,
     )
     core::assert(
         hash_u256(
                 0x1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100,
             )
-            == 0xcbf59c5116ff32b4,
+            == 0x5ddf4b116554d203,
     )
 }
 

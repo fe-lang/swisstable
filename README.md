@@ -22,10 +22,11 @@ return `false` and leave the table as it was. Removing a key whose next slot is
 empty leaves an empty slot, as do the tombstones before it, and removing the
 last entry empties every slot.
 
-The built-in `u256` key hash is XXH64 with seed zero over the key's 32
-little-endian bytes. Custom keys must give equal keys equal hashes. The group
-index comes from the hash's low bits and the seven-bit fingerprint from its top
-bits. The deterministic hash does not provide hash-flood protection.
+The built-in `u256` key hash multiplies pairs of the key's 64-bit limbs,
+offset by constants, into 128-bit products and folds each product's halves
+together, as foldhash does. Custom keys must give equal keys equal hashes. The
+group index comes from the hash's low bits and the seven-bit fingerprint from
+its top bits. The deterministic hash does not provide hash-flood protection.
 
 Add an immutable git revision to your ingot's `fe.toml`:
 
