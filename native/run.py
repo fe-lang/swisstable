@@ -35,22 +35,12 @@ def hash_key(key, variant):
         return (x ^ (x >> 31)) & MASK64
     p1, p2, p3, p4 = PRIMES
 
-    def rotate(x, n):
-        return ((x << n) | (x >> (64 - n))) & MASK64
+    def fold(a, b):
+        product = a * b
+        return (product ^ (product >> 64)) & MASK64
 
-    def update(acc, lane):
-        return (rotate((acc + lane * p2) & MASK64, 31) * p1) & MASK64
-
-    lanes = [(key >> shift) & MASK64 for shift in (0, 64, 128, 192)]
-    accumulators = [update(acc & MASK64, lane)
-                    for acc, lane in zip((p1 + p2, p2, 0, -p1), lanes)]
-    h = sum(rotate(acc, shift) for acc, shift in zip(accumulators, (1, 7, 12, 18))) & MASK64
-    for acc in accumulators:
-        h = ((h ^ update(0, acc)) * p1 + p4) & MASK64
-    h = (h + 32) & MASK64
-    h = ((h ^ (h >> 33)) * p2) & MASK64
-    h = ((h ^ (h >> 29)) * p3) & MASK64
-    return h ^ (h >> 32)
+    l0, l1, l2, l3 = [(key >> shift) & MASK64 for shift in (0, 64, 128, 192)]
+    return fold(fold(l0 ^ p1, l1 ^ p2) ^ p2, fold(l2 ^ p3, l3 ^ p4) ^ p1)
 
 
 class FixedModel:
@@ -304,7 +294,7 @@ def workloads():
         cases.append({'name': f'mixed-oracle-{offset}', 'kind': 'oracle',
                       'operations': operations, 'queries': keys[offset:offset + 128]})
     # Every single bit, adjacent-bit pair, and complemented single bit is hashed
-    # at runtime, supplementing the independent xxhsum golden vectors in Fe.
+    # at runtime, supplementing the reference vectors in Fe.
     keys = [0, MASK256] + [1 << i for i in range(256)]
     keys += [MASK256 ^ (1 << i) for i in range(256)]
     keys += [3 << i for i in range(255)]

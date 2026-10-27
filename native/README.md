@@ -1,18 +1,18 @@
 # SwissTable hashing and probes
 
-`hash_u256` implements XXH64 with seed zero over exactly 32 little-endian bytes.
-The numeric key's least significant limb is the first input lane. The Fe
-implementation specializes the [XXH64 specification][spec] to that fixed length;
-it does not allocate or serialize a byte buffer. `SwissKey.hash` returns `u64`.
-Equal keys must hash equally, and a custom implementation should mix all key bits.
-The table selects its initial 16-slot group from the hash's low bits, as many as
-its capacity needs, and its seven-bit fingerprint from the top seven bits.
-Equality resolves fingerprint collisions.
+`hash_u256` multiplies the key's 64-bit limbs in pairs, each XORed with a
+constant, into 128-bit products and folds each product's high and low words
+together, as [foldhash][foldhash] does; a third folded multiply combines the
+two lanes. `SwissKey.hash` returns `u64`. Equal keys must hash equally, and a
+custom implementation should mix all key bits. The table selects its initial
+16-slot group from the hash's low bits, as many as its capacity needs, and its
+seven-bit fingerprint from the top seven bits. Equality resolves fingerprint
+collisions.
 
 The previous mixer multiplied a whole `u256` and shifted by small amounts. High
 limbs did not reach the bits consumed by the table: varying limb 2 or 3 produced
 identical initial groups and fingerprints. Narrowing before mixing would discard
-those limbs; the new hash consumes all four lanes before its final avalanche.
+those limbs; the new hash consumes all four limbs before its final multiply.
 
 This deterministic, non-cryptographic hash does not provide hash-flood protection,
 which production state storage still needs an explicit threat model for. The
@@ -20,7 +20,7 @@ table grows before entries and tombstones fill 7/8 of its slots, rehashing them
 and dropping every tombstone; removal frees slots whose successor is empty, so a
 miss stops at an empty slot however many entries were removed.
 
-[spec]: https://github.com/Cyan4973/xxHash/blob/v0.8.3/doc/xxhash_spec.md
+[foldhash]: https://github.com/orlp/foldhash
 
 ## Reproduce
 
@@ -86,5 +86,5 @@ runner; a macOS result does not establish cross-platform acceptance.
 The runner passes all 2,004 scenario checks across its 12 O0/O1/O2 builds (both
 variants, with and without probe instrumentation), including dictionary behavior
 and the physical probe counts of both models. All eight library tests also pass at
-every level. This check used Fe `999ff9562` (branch `feat/owned-value-destruction`)
+every level. This check used Fe `71ffd7ca4` (branch `feat/generic-byte-order`)
 on x86_64 Linux; timing trials were omitted.
