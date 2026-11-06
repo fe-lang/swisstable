@@ -72,7 +72,8 @@ fn h2(_ hash: u64) -> u8 {
 
 // The group a hash selects among `capacity` slots, a power of two.
 fn group_start(_ hash: u64, _ capacity: usize) -> usize {
-    let slot = (hash as usize) & (capacity - 1)
+    let low: usize = hash.downcast_truncate()
+    let slot = low & (capacity - 1)
     slot - slot % GROUP_WIDTH
 }
 
