@@ -3,7 +3,7 @@ use core::default::Default
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
 use core::panics::PANIC_OUT_OF_MEMORY
 
-const GROUP_WIDTH: usize = 16
+const MIN_CAPACITY: usize = 16
 const EMPTY: u8 = 255
 const DELETED: u8 = 128
 
@@ -23,10 +23,9 @@ struct Search { found: bool, slot: usize }
 
 /// A hash table of `Copy` keys and values in memory it owns.
 ///
-/// The slots come in groups of 16, a power of two of them, and each has a
-/// control byte: empty, deleted, or seven bits of its key's hash. A key is
-/// searched for from the group its hash selects, slot by slot, until an
-/// empty slot. Entries and tombstones never fill more than 7/8 of the
+/// The slots, a power of two of them and at least 16, each have a control
+/// byte: empty, deleted, or seven bits of its key's hash. A key is searched
+/// for from the slot its hash selects, slot by slot, until an empty slot. Entries and tombstones never fill more than 7/8 of the
 /// slots: past that, the table moves its entries to fresh slots, doubling
 /// them unless the entries would fill at most half, which drops every
 /// tombstone. A move that cannot allocate leaves the table as it was.
@@ -65,16 +64,17 @@ pub fn hash_u256(_ key: u256) -> u64 {
     folded_multiply(low ^ HASH_PRIME2, high ^ HASH_PRIME1)
 }
 
-// The fingerprint: the hash's top seven bits, which no group index uses.
+// The fingerprint: the hash's top seven bits, which no slot index uses.
 fn h2(_ hash: u64) -> u8 {
     (hash >> 57).downcast_unchecked()
 }
 
-// The group a hash selects among `capacity` slots, a power of two.
-fn group_start(_ hash: u64, _ capacity: usize) -> usize {
+// The slot a hash selects among `capacity` slots, a power of two. Starting
+// each search there, rather than at the start of an aligned group, keeps keys
+// whose slots share a group from piling into one run.
+fn home_slot(_ hash: u64, _ capacity: usize) -> usize {
     let low: usize = hash.downcast_truncate()
-    let slot = low & (capacity - 1)
-    slot - slot % GROUP_WIDTH
+    low & (capacity - 1)
 }
 
 // The most entries and tombstones `capacity` slots hold.
@@ -85,7 +85,7 @@ fn max_load(_ capacity: usize) -> usize {
 // The first empty slot of `hash`'s search in `ctrl`.
 fn empty_slot(_ ctrl: MemArray<u8>, _ hash: u64) -> usize {
     let capacity = ctrl.len()
-    var slot = group_start(hash, capacity)
+    var slot = home_slot(hash, capacity)
     while ctrl[slot] != EMPTY {
         slot = (slot + 1) & (capacity - 1)
     }
@@ -132,7 +132,7 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
         let fingerprint = h2(hash)
         // The first tombstone the search passes, if any, takes an insertion.
         var tombstone = capacity
-        var slot = group_start(hash, capacity)
+        var slot = home_slot(hash, capacity)
         while true {
             let ctrl = self.ctrl[slot]
             if ctrl == fingerprint && self.keys[slot].equals(key) {
@@ -265,7 +265,7 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
         let full = max_load(self.ctrl.len())
         var capacity = self.ctrl.len()
         if needed > full / 2 {
-            capacity = GROUP_WIDTH
+            capacity = MIN_CAPACITY
             while max_load(capacity) < needed || max_load(capacity) <= full {
                 capacity *= 2
             }
@@ -324,7 +324,7 @@ fn swisstable_hash_distributes_each_limb() {
         var i: u256 = 0
         while i < 256 {
             let hash = hash_u256(i << shift)
-            groups[group_start(hash, 256) / GROUP_WIDTH] += 1
+            groups[home_slot(hash, 256) / 16] += 1
             let fingerprint = h2(hash) as usize
             if !fingerprints[fingerprint] {
                 fingerprints[fingerprint] = true
@@ -340,7 +340,7 @@ fn swisstable_hash_distributes_each_limb() {
     }
 }
 
-// Deliberately collide in one group to exercise wraparound and equality.
+// Deliberately collide in one slot to exercise wraparound and equality.
 struct CollidingKey { value: u256 }
 impl Copy for CollidingKey {}
 impl Default for CollidingKey {
@@ -416,7 +416,7 @@ fn swisstable_basic_operations() {
     core::assert(!table.remove(17))
 
     table.insert(17, 99)
-    core::assert(table.len() == 1 && table.capacity() == GROUP_WIDTH)
+    core::assert(table.len() == 1 && table.capacity() == MIN_CAPACITY)
     let first = table.get(17)
     core::assert(first.found)
     core::assert(first.value == 99)
