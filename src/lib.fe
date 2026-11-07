@@ -158,6 +158,16 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
     pub fn contains(self, _ key: K) -> bool {
         self.search(key, key.hash()).found
     }
+    /// The slot holding `key`, if any, for `value_at`. An insertion or
+    /// reservation can move every entry; a removal moves no other.
+    pub fn find(self, _ key: K) -> Option<usize> {
+        let search = self.search(key, key.hash())
+        if search.found { Option::Some(search.slot) } else { Option::None }
+    }
+    /// The value in a slot `find` returned, in place.
+    pub fn value_at(mut? self, _ slot: usize) -> mut? V {
+        mut? self.values[slot]
+    }
     // Visit every live entry by reading slots `0..capacity()`; order is unspecified.
     pub fn entry(self, _ slot: usize) -> Entry<K, V> {
         let ctrl = self.ctrl[slot]
@@ -410,6 +420,22 @@ fn swisstable_basic_operations() {
     core::assert(table.len() == 0)
     core::assert(!table.remove(17))
     core::assert(!table.get(17).found)
+}
+
+#[test]
+fn swisstable_values_change_in_place_at_found_slots() {
+    var table = SwissTable<u256, u256>::empty()
+    core::assert(table.find(5).is_none())
+    for key in 0..40 { table.insert(key as u256, key as u256) }
+    core::assert(table.find(40).is_none())
+    let slot = table.find(17).unwrap()
+    core::assert(table.value_at(slot) == 17)
+    let value = mut table.value_at(slot)
+    value += 100
+    core::assert(table.get(17).value == 117 && table.len() == 40)
+    // Removing other keys leaves the slot in place.
+    for key in 0..10 { core::assert(table.remove(key as u256)) }
+    core::assert(table.find(17) == Option::Some(slot) && table.value_at(slot) == 117)
 }
 
 #[test]
