@@ -7,10 +7,12 @@ from [fevm](https://github.com/fe-lang/fevm) with its library history intact.
 destroyed. Keys implement `SwissKey`, `Default`, and `Copy`; values implement
 `Default` and `Copy`. The public API includes `empty`, `len`, `capacity`,
 `is_empty`, `get`, `contains`, `find`, `value_at`, `insert`, `try_insert`,
-`try_reserve`, `remove`, and `entry`. `get` returns a `Lookup<V>` with `found`
+`try_find_or_insert`, `try_reserve`, `remove`, and `entry`. `get` returns a `Lookup<V>` with `found`
 and `value` fields. `find` returns the slot holding a key, and `value_at(slot)`
-is that value in place, so a lookup can read and update it once; an insertion
-or reservation can move every entry, and a removal moves no other.
+is that value in place, so a lookup can read and update it once;
+`try_find_or_insert` does the same after inserting an absent key with the
+default value. An insertion or reservation can move every entry, and a removal
+moves no other.
 `entry(slot)` reads one physical slot below `capacity()`, so callers can visit
 every live entry; deleted and empty slots report `occupied: false`. Inserting an
 existing key updates its value.
@@ -48,7 +50,7 @@ core::assert(lookup.found && lookup.value == 99)
 ```
 
 Use a Fe compiler with native backend support and owned-value destruction. All
-nine library tests pass at O0/O1/O2 natively and on EVM on Linux x86_64 with
+ten library tests pass at O0/O1/O2 natively and on EVM on Linux x86_64 with
 Fe `58c897d0f`:
 
 ```sh

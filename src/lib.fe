@@ -186,17 +186,28 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
     /// As `insert`, but `false`, leaving the table as it was, when it cannot
     /// grow.
     pub fn try_insert(mut self, _ key: K, _ value: V) -> bool {
+        match self.try_find_or_insert(key) {
+            Option::Some(slot) => {
+                self.values[slot] = value
+                true
+            },
+            Option::None => false,
+        }
+    }
+    /// The slot holding `key`, for `value_at`, after inserting it with the
+    /// default value if it is absent, with one search; `None`, leaving the
+    /// table as it was, when it cannot grow.
+    pub fn try_find_or_insert(mut self, _ key: K) -> Option<usize> {
         let hash = key.hash()
         var search = self.search(key, hash)
         if search.found {
-            self.values[search.slot] = value
-            return true
+            return Option::Some(search.slot)
         }
         // An entry in a tombstone's slot adds no load.
         let reuses = self.ctrl.len() != 0 && self.ctrl[search.slot] == DELETED
         if !reuses && self.len + self.deleted >= max_load(self.ctrl.len()) {
             if !self.try_grow(self.len + 1) {
-                return false
+                return Option::None
             }
             search = self.search(key, hash)
         }
@@ -205,9 +216,9 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
         }
         self.ctrl[search.slot] = h2(hash)
         self.keys[search.slot] = key
-        self.values[search.slot] = value
+        self.values[search.slot] = V::default()
         self.len += 1
-        true
+        Option::Some(search.slot)
     }
     /// Makes room for `additional` more entries without moving any; `false`,
     /// leaving the table as it was, when it cannot allocate.
@@ -436,6 +447,22 @@ fn swisstable_values_change_in_place_at_found_slots() {
     // Removing other keys leaves the slot in place.
     for key in 0..10 { core::assert(table.remove(key as u256)) }
     core::assert(table.find(17) == Option::Some(slot) && table.value_at(slot) == 117)
+}
+
+#[test]
+fn swisstable_find_or_insert_adds_defaults_once() {
+    var table = SwissTable<u256, u256>::empty()
+    for key in 0..40 {
+        let slot = table.try_find_or_insert(key as u256).unwrap()
+        core::assert(table.value_at(slot) == 0)
+        let value = mut table.value_at(slot)
+        value = key as u256 * 3
+    }
+    core::assert(table.len() == 40)
+    // A present key keeps its value and adds nothing.
+    let slot = table.try_find_or_insert(7).unwrap()
+    core::assert(table.value_at(slot) == 21 && table.len() == 40 && table.find(7) == Option::Some(slot))
+    for key in 0..40 { core::assert(table.get(key as u256).value == key as u256 * 3) }
 }
 
 #[test]
