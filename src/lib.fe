@@ -227,6 +227,14 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
         let needed = self.len + additional
         needed + self.deleted <= max_load(self.ctrl.len()) || self.try_grow(needed)
     }
+    /// Removes every entry, keeping the slots for later insertions.
+    pub fn clear(mut self) {
+        if self.len + self.deleted != 0 {
+            self.ctrl.as_slice().fill(EMPTY)
+            self.len = 0
+            self.deleted = 0
+        }
+    }
     pub fn remove(mut self, _ key: K) -> bool {
         let search = self.search(key, key.hash())
         if !search.found {
@@ -556,4 +564,24 @@ fn swisstable_entries_visit_each_live_key_once() {
         slot += 1
     }
     core::assert(count == table.len() && count == 26)
+}
+
+#[test]
+fn swisstable_clear_keeps_slots_and_forgets_entries() {
+    var table = SwissTable<u256, u256>::empty()
+    var key: u256 = 0
+    while key < 40 {
+        table.insert(key, key * 3)
+        key += 1
+    }
+    core::assert(table.remove(7))
+    let capacity = table.capacity()
+    table.clear()
+    core::assert(table.len() == 0 && table.capacity() == capacity)
+    core::assert(!table.contains(0) && !table.contains(39) && !table.get(7).found)
+    table.insert(5, 11)
+    core::assert(table.len() == 1 && table.get(5).value == 11 && !table.contains(6))
+    table.clear()
+    table.clear()
+    core::assert(table.len() == 0 && table.capacity() == capacity)
 }
