@@ -25,10 +25,11 @@ struct Search { found: bool, slot: usize }
 ///
 /// The slots, a power of two of them and at least 16, each have a control
 /// byte: empty, deleted, or seven bits of its key's hash. A key is searched
-/// for from the slot its hash selects, slot by slot, until an empty slot. Entries and tombstones never fill more than 7/8 of the
-/// slots: past that, the table moves its entries to fresh slots, doubling
-/// them unless the entries would fill at most half, which drops every
-/// tombstone. A move that cannot allocate leaves the table as it was.
+/// for from the slot its hash selects, slot by slot, until an empty slot.
+/// Entries and tombstones never fill more than 7/8 of the slots: past that,
+/// the table moves its entries to fresh slots, doubling them unless the
+/// entries would fill at most half, which drops every tombstone. A move that
+/// cannot allocate leaves the table as it was.
 pub struct SwissTable<K, V> {
     ctrl: MemArray<u8>,
     keys: MemArray<K>,

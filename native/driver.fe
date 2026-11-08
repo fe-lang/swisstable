@@ -106,7 +106,7 @@ pub fn main() -> i32 uses (stdin: mut Stdin, out: mut Stdout) {
                 write256(lookup.value)
                 let hash = key.hash()
                 write64((hash as u256).downcast_truncate())
-                write64(__GROUP__.downcast_unchecked())
+                write64(__START__.downcast_unchecked())
                 write64(h2(hash) as u64)
                 i += 1
             }

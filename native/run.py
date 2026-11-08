@@ -57,7 +57,7 @@ class FixedModel:
     def deleted(self):
         return self.ctrl.count(128)
 
-    def group(self, h):
+    def start(self, h):
         return h & 240
 
     def fingerprint(self, h):
@@ -99,7 +99,7 @@ def max_load(capacity):
 
 
 class GrowModel:
-    """Physical probe accounting of the growable table: power-of-two groups,
+    """Physical probe accounting of the growable table: power-of-two slots,
     7/8 load, rehash on growth, and empty-slot reclamation on removal."""
     def __init__(self, variant):
         self.variant = variant
@@ -112,8 +112,8 @@ class GrowModel:
     def capacity(self):
         return len(self.ctrl)
 
-    def group(self, h):
-        return 0 if not self.ctrl else (h & (self.capacity - 1)) & ~15
+    def start(self, h):
+        return 0 if not self.ctrl else h & (self.capacity - 1)
 
     def fingerprint(self, h):
         return h >> 57
@@ -122,7 +122,7 @@ class GrowModel:
         if not self.ctrl:
             return False, 0, (0, 0, 0)
         h = hash_key(key, self.variant)
-        slot = self.group(h)
+        slot = self.start(h)
         tombstone = None
         groups = slots = comparisons = 0
         while True:
@@ -151,7 +151,7 @@ class GrowModel:
         for slot, fingerprint in enumerate(self.ctrl):
             if fingerprint not in (255, 128):
                 key = self.keys[slot]
-                to = (hash_key(key, self.variant) & (capacity - 1)) & ~15
+                to = hash_key(key, self.variant) & (capacity - 1)
                 while ctrl[to] != 255:
                     to = (to + 1) & (capacity - 1)
                 ctrl[to], keys[to] = fingerprint, key
@@ -191,9 +191,9 @@ class GrowModel:
 # The historical baseline has 256 fixed slots; the candidate grows.
 VARIANTS = {
     'baseline': {'model': FixedModel, 'insert': 'table.insert(key, value)',
-                 'group': 'group_start(hash)', 'search': 'table.search(key, hash, h2(hash))'},
+                 'start': 'group_start(hash)', 'search': 'table.search(key, hash, h2(hash))'},
     'candidate': {'model': GrowModel, 'insert': 'table.try_insert(key, value)',
-                  'group': '(if table.capacity() == 0 { 0 } else { group_start(hash, table.capacity()) })',
+                  'start': '(if table.capacity() == 0 { 0 } else { home_slot(hash, table.capacity()) })',
                   'search': 'table.search(key, hash)'},
 }
 
@@ -220,7 +220,7 @@ def instrument(source, variant):
          'var tombstone = capacity', 1),
         ('let ctrl = self.ctrl[slot]\n            if ctrl == fingerprint',
          'let ctrl = self.ctrl[slot]\nslots += 1\n'
-         'if slots == 1 || slot % GROUP_WIDTH == 0 { groups += 1 }\n'
+         'if slots == 1 || slot % 16 == 0 { groups += 1 }\n'
          'if ctrl == fingerprint { comparisons += 1 }\n            if ctrl == fingerprint', 1),
         ('return Search { found: true, slot }',
          'return Search { groups, slots, comparisons, found: true, slot }', 1),
@@ -249,7 +249,7 @@ write64(search.groups)
 write64(search.slots)
 write64(search.comparisons)''' if profile else ''
     driver = HERE.joinpath('driver.fe').read_text()
-    driver = driver.replace('__INSERT__', spec['insert']).replace('__GROUP__', spec['group'])
+    driver = driver.replace('__INSERT__', spec['insert']).replace('__START__', spec['start'])
     return table + driver.replace('__PROFILE_OPERATION__', diagnostic).replace('__PROFILE_QUERY__', diagnostic)
 
 
@@ -368,7 +368,7 @@ def execute(executable, case, rounds, variant, profile, samples=1):
                 raise AssertionError(f'{case["name"]}: query probes differ')
             observed = (take(), take(32), take(), take(), take())
             h = hash_key(key, variant)
-            wanted = (int(key in values), values.get(key, 0), h, model.group(h), model.fingerprint(h))
+            wanted = (int(key in values), values.get(key, 0), h, model.start(h), model.fingerprint(h))
             if observed != wanted:
                 raise AssertionError(f'{case["name"]}: key {key:#x}: {observed} != {wanted}')
         ticks.append(take())
