@@ -4,9 +4,9 @@
 constant, into 128-bit products and folds each product's high and low words
 together, as [foldhash][foldhash] does; a third folded multiply combines the
 two lanes. `SwissKey.hash` returns `u64`. Equal keys must hash equally, and a
-custom implementation should mix all key bits. The table selects its initial
-16-slot group from the hash's low bits, as many as its capacity needs, and its
-seven-bit fingerprint from the top seven bits. Equality resolves fingerprint
+custom implementation should mix all key bits. The table starts each search
+at the slot the hash's low bits select, as many as its capacity needs, and takes
+its seven-bit fingerprint from the top seven bits. Equality resolves fingerprint
 collisions.
 
 The previous mixer multiplied a whole `u256` and shifted by small amounts. High
