@@ -51,7 +51,7 @@ core::assert(lookup.found && lookup.value == 99)
 
 Use a Fe compiler with native backend support and owned-value destruction. All
 ten library tests pass at O0/O1/O2 natively and on EVM on Linux x86_64 with
-Fe `58c897d0f`:
+Fe `22b156fff`:
 
 ```sh
 fe test --backend native -O 0 .
