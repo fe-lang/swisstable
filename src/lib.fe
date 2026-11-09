@@ -26,10 +26,11 @@ struct Search { found: bool, slot: usize }
 /// The slots, a power of two of them and at least 16, each have a control
 /// byte: empty, deleted, or seven bits of its key's hash. A key is searched
 /// for from the slot its hash selects, slot by slot, until an empty slot.
-/// Entries and tombstones never fill more than 7/8 of the slots: past that,
-/// the table moves its entries to fresh slots, doubling them unless the
-/// entries would fill at most half, which drops every tombstone. A move that
-/// cannot allocate leaves the table as it was.
+/// Entries and tombstones never fill more than half of the slots, which
+/// keeps byte-by-byte probe runs short: past that, the table moves its
+/// entries to fresh slots, doubling them unless the entries would fill at
+/// most a quarter, which drops every tombstone. A move that cannot allocate
+/// leaves the table as it was.
 pub struct SwissTable<K, V> {
     ctrl: MemArray<u8>,
     keys: MemArray<K>,
@@ -80,7 +81,7 @@ fn home_slot(_ hash: u64, _ capacity: usize) -> usize {
 
 // The most entries and tombstones `capacity` slots hold.
 fn max_load(_ capacity: usize) -> usize {
-    capacity - capacity / 8
+    capacity / 2
 }
 
 // The first empty slot of `hash`'s search in `ctrl`.
@@ -375,7 +376,7 @@ fn swisstable_collisions_updates_and_churn() {
         core::assert(table.try_insert(CollidingKey { value: i }, i + 1))
         i += 1
     }
-    core::assert(table.len() == 300 && table.capacity() == 512)
+    core::assert(table.len() == 300 && table.capacity() == 1024)
     // A tombstone before an existing key must not create a duplicate on update.
     core::assert(table.remove(CollidingKey { value: 0 }))
     table.insert(CollidingKey { value: 255 }, 999)
@@ -401,7 +402,7 @@ fn swisstable_collisions_updates_and_churn() {
         generation += 1
     }
     // Churn drops tombstones without growing.
-    core::assert(table.capacity() == 512)
+    core::assert(table.capacity() == 1024)
     i = 0
     while i < count {
         let key = generation * count + i
@@ -481,11 +482,11 @@ fn swisstable_grows_and_keeps_every_entry() {
     while i < 5000 {
         let key = i.wrapping_mul(257) + 11
         table.insert(key, key + 1000)
-        // Entries and tombstones fill at most 7/8 of the slots.
-        core::assert(table.len() <= table.capacity() - table.capacity() / 8)
+        // Entries and tombstones fill at most half of the slots.
+        core::assert(table.len() <= table.capacity() / 2)
         i += 1
     }
-    core::assert(table.len() == 5000 && table.capacity() == 8192)
+    core::assert(table.len() == 5000 && table.capacity() == 16384)
     i = 0
     while i < 5000 {
         let key = i.wrapping_mul(257) + 11
@@ -501,7 +502,7 @@ fn swisstable_reserves_room() {
     var table = SwissTable<u256, u256>::empty()
     core::assert(table.try_reserve(100))
     let capacity = table.capacity()
-    core::assert(capacity == 128)
+    core::assert(capacity == 256)
     var i: u256 = 0
     while i < 100 {
         core::assert(table.try_insert(i, i))
@@ -528,7 +529,7 @@ fn swisstable_removal_reclaims_slots() {
         round += 1
     }
     // Emptying the table frees every slot, so churn never grows it.
-    core::assert(table.is_empty() && table.capacity() == 128)
+    core::assert(table.is_empty() && table.capacity() == 256)
     var slot: usize = 0
     while slot < table.capacity() {
         core::assert(!table.entry(slot).occupied)
