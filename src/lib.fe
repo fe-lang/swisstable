@@ -41,8 +41,6 @@ pub struct SwissTable<K, V> {
 
 const HASH_PRIME1: u64 = 0x9e3779b185ebca87
 const HASH_PRIME2: u64 = 0xc2b2ae3d27d4eb4f
-const HASH_PRIME3: u64 = 0x165667b19e3779f9
-const HASH_PRIME4: u64 = 0x85ebca77c2b2ae63
 
 // The high and low words of the 128-bit product, folded together.
 fn folded_multiply(_ a: u64, _ b: u64) -> u64 {
@@ -52,18 +50,21 @@ fn folded_multiply(_ a: u64, _ b: u64) -> u64 {
     low ^ high
 }
 
-// Folded multiplication, as in foldhash: each pair of the key's 64-bit
-// limbs, offset by constants, multiplies into one lane, and the lanes
-// multiply into the hash. Deterministic and non-cryptographic; this is not
-// hash-flood protection.
+// One folded multiplication, as in foldhash's short inputs: the key's two
+// high limbs, rotated four bits so that equal limbs do not cancel and their
+// low bits reach the fingerprint, fold onto its two low ones, and the pairs,
+// offset by constants, multiply. A lookup waits on its hash before probing,
+// and one multiplication there took a third of the latency of a lane per
+// limb pair. Deterministic and non-cryptographic; this is not hash-flood
+// protection.
 pub fn hash_u256(_ key: u256) -> u64 {
     let limb0: u64 = key.downcast_truncate()
     let limb1: u64 = (key >> 64).downcast_truncate()
     let limb2: u64 = (key >> 128).downcast_truncate()
     let limb3: u64 = (key >> 192).downcast_truncate()
-    let low = folded_multiply(limb0 ^ HASH_PRIME1, limb1 ^ HASH_PRIME2)
-    let high = folded_multiply(limb2 ^ HASH_PRIME3, limb3 ^ HASH_PRIME4)
-    folded_multiply(low ^ HASH_PRIME2, high ^ HASH_PRIME1)
+    let high2 = (limb2 >> 4) | (limb2 << 60)
+    let high3 = (limb3 >> 4) | (limb3 << 60)
+    folded_multiply(limb0 ^ high2 ^ HASH_PRIME1, limb1 ^ high3 ^ HASH_PRIME2)
 }
 
 // The fingerprint: the hash's top seven bits, which no slot index uses.
@@ -304,23 +305,23 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
 #[test]
 fn swisstable_hash_reference_vectors() {
     // `folded_multiply` over 128-bit products, computed independently.
-    core::assert(hash_u256(0) == 0xe0a7e05b32ab24b6)
-    core::assert(hash_u256(1) == 0x7fba99af9d58edc9)
-    core::assert(hash_u256(1 << 64) == 0xc320d13399174840)
-    core::assert(hash_u256(1 << 128) == 0xbb7549e3223197aa)
-    core::assert(hash_u256(1 << 192) == 0xbe42ec3b709f5d00)
-    core::assert(hash_u256(1 << 255) == 0x4eb05caf2ed07349)
+    core::assert(hash_u256(0) == 0xa6a7237baa01ec01)
+    core::assert(hash_u256(1) == 0x6414d4b942dc01f2)
+    core::assert(hash_u256(1 << 64) == 0x38ef99352cf5228a)
+    core::assert(hash_u256(1 << 128) == 0x82da1697dd825d5a)
+    core::assert(hash_u256(1 << 192) == 0xccc4ab14b2ae51f8)
+    core::assert(hash_u256(1 << 255) == 0x6bb56f493edeb254)
     core::assert(
         hash_u256(
                 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
             )
-            == 0xa0b88a029900681b,
+            == 0xa6a7237baa01ec01,
     )
     core::assert(
         hash_u256(
                 0x1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100,
             )
-            == 0x5ddf4b116554d203,
+            == 0x9f68bee85fea760d,
     )
 }
 
