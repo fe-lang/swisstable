@@ -19,9 +19,10 @@ existing key updates its value.
 
 A table has at least 16 slots, a power of two of them; an empty table has none.
 A key's search starts at the slot its hash selects and reads slots in order until
-an empty one. Entries and tombstones never fill more than 7/8 of the slots: an
-insertion past that moves the entries to fresh slots, doubling them unless the
-entries would fill at most half, and drops every tombstone. `insert` reverts with
+an empty one. Entries and tombstones never fill more than half of the slots,
+which keeps byte-by-byte probe runs short: an insertion past that moves the
+entries to fresh slots, doubling them unless the entries would fill at most a
+quarter, and drops every tombstone. `insert` reverts with
 `Panic(0x41)` when the table cannot allocate; `try_insert` and `try_reserve`
 return `false` and leave the table as it was. Removing a key whose next slot is
 empty leaves an empty slot, as do the tombstones before it, and removing the

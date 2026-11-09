@@ -16,7 +16,7 @@ those limbs; the new hash consumes all four limbs before its final multiply.
 
 This deterministic, non-cryptographic hash does not provide hash-flood protection,
 which production state storage still needs an explicit threat model for. The
-table grows before entries and tombstones fill 7/8 of its slots, rehashing them
+table grows before entries and tombstones fill half of its slots, rehashing them
 and dropping every tombstone; removal frees slots whose successor is empty, so a
 miss stops at an empty slot however many entries were removed.
 
