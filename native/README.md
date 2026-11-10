@@ -85,6 +85,6 @@ runner; a macOS result does not establish cross-platform acceptance.
 
 The runner passes all 2,004 scenario checks across its 12 O0/O1/O2 builds (both
 variants, with and without probe instrumentation), including dictionary behavior
-and the physical probe counts of both models. All ten library tests also pass at
+and the physical probe counts of both models. All twelve library tests also pass at
 every level. This check used Fe `22b156fff` on x86_64 Linux; timing trials were
 omitted.

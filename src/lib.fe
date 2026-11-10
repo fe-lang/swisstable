@@ -237,36 +237,50 @@ impl<K, V> SwissTable<K, V> where K: SwissKey + Default + Copy, V: Default + Cop
             self.deleted = 0
         }
     }
+    /// Removes `key`'s entry; false if it has none.
     pub fn remove(mut self, _ key: K) -> bool {
         let search = self.search(key, key.hash())
-        if !search.found {
-            return false
+        if search.found {
+            self.remove_slot(search.slot)
         }
+        search.found
+    }
+    /// Removes `key`'s entry and returns its value; none if it has none.
+    pub fn take(mut self, _ key: K) -> Option<V> {
+        let search = self.search(key, key.hash())
+        if !search.found {
+            return Option::None
+        }
+        let value = self.values[search.slot]
+        self.remove_slot(search.slot)
+        Option::Some(value)
+    }
+
+    // Removes the entry at `slot`, which holds one.
+    fn remove_slot(mut self, _ slot: usize) {
         self.len -= 1
         let capacity = self.ctrl.len()
         if self.len == 0 {
             // Nothing is left to find.
             self.ctrl.as_slice().fill(EMPTY)
             self.deleted = 0
-            return true
+            return
         }
         // Every search reads slots in the same circular order, and ends at
         // an empty slot: one the next slot of which is empty ends every
         // search through it, and so do the tombstones before it.
-        var slot = search.slot
         if self.ctrl[(slot + 1) & (capacity - 1)] != EMPTY {
             self.ctrl[slot] = DELETED
             self.deleted += 1
-            return true
+            return
         }
         self.ctrl[slot] = EMPTY
-        slot = (slot + capacity - 1) & (capacity - 1)
-        while self.ctrl[slot] == DELETED {
-            self.ctrl[slot] = EMPTY
+        var before = (slot + capacity - 1) & (capacity - 1)
+        while self.ctrl[before] == DELETED {
+            self.ctrl[before] = EMPTY
             self.deleted -= 1
-            slot = (slot + capacity - 1) & (capacity - 1)
+            before = (before + capacity - 1) & (capacity - 1)
         }
-        true
     }
 
     // Moves the entries to fresh slots for `needed` of them: the same
@@ -536,6 +550,33 @@ fn swisstable_removal_reclaims_slots() {
         core::assert(!table.entry(slot).occupied)
         slot += 1
     }
+}
+
+#[test]
+fn swisstable_take_removes_and_returns_values() {
+    var table = SwissTable<u256, u256>::empty()
+    core::assert(table.take(1).is_none())
+    var i: u256 = 0
+    while i < 200 {
+        table.insert(i, i * 3 + 1)
+        i += 1
+    }
+    // Taking every other key leaves tombstones among the rest, which later
+    // searches pass and later takes still find past.
+    i = 0
+    while i < 200 {
+        core::assert(table.take(i).unwrap() == i * 3 + 1)
+        core::assert(table.take(i).is_none() && !table.contains(i))
+        i += 2
+    }
+    core::assert(table.len() == 100)
+    i = 1
+    while i < 200 {
+        core::assert(table.get(i).value == i * 3 + 1)
+        core::assert(table.take(i).unwrap() == i * 3 + 1)
+        i += 2
+    }
+    core::assert(table.is_empty())
 }
 
 #[test]
