@@ -19,8 +19,7 @@ TABLE = 'src/lib.fe'
 BASELINE = '60017e7f2f033e971bdb2a5f5d4af097115f3be8'
 MASK64 = (1 << 64) - 1
 MASK256 = (1 << 256) - 1
-PRIMES = (0x9E3779B185EBCA87, 0xC2B2AE3D27D4EB4F,
-          0x165667B19E3779F9, 0x85EBCA77C2B2AE63)
+PRIMES = (0x9E3779B185EBCA87, 0xC2B2AE3D27D4EB4F)
 
 
 def digest(data):
@@ -33,14 +32,17 @@ def hash_key(key, variant):
         x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & MASK256
         x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & MASK256
         return (x ^ (x >> 31)) & MASK64
-    p1, p2, p3, p4 = PRIMES
+    p1, p2 = PRIMES
 
     def fold(a, b):
         product = a * b
         return (product ^ (product >> 64)) & MASK64
 
+    def rotate4(limb):
+        return ((limb >> 4) | (limb << 60)) & MASK64
+
     l0, l1, l2, l3 = [(key >> shift) & MASK64 for shift in (0, 64, 128, 192)]
-    return fold(fold(l0 ^ p1, l1 ^ p2) ^ p2, fold(l2 ^ p3, l3 ^ p4) ^ p1)
+    return fold(l0 ^ rotate4(l2) ^ p1, l1 ^ rotate4(l3) ^ p2)
 
 
 class FixedModel:
@@ -95,12 +97,13 @@ class FixedModel:
 
 
 def max_load(capacity):
-    return capacity - capacity // 8
+    return capacity // 2
 
 
 class GrowModel:
     """Physical probe accounting of the growable table: power-of-two slots,
-    7/8 load, rehash on growth, and empty-slot reclamation on removal."""
+    entries and tombstones in at most half of them, rehash on growth, and
+    empty-slot reclamation on removal."""
     def __init__(self, variant):
         self.variant = variant
         self.ctrl = []
